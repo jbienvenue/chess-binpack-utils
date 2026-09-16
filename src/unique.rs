@@ -146,7 +146,7 @@ fn unique_sf<T: Read + Seek>(file: T, limit: Option<usize>) -> Result<u64> {
 
 fn unique_viriformat<T: Read + Seek>(file: T, limit: Option<usize>) -> Result<u64> {
     let mut reader = BufReader::new(file);
-    let mut unique: HashSet<u64> = HashSet::new();
+    let mut unique: HyperLogLog = HyperLogLog::new();
     let mut processed = 0usize;
 
     loop {
@@ -165,11 +165,11 @@ fn unique_viriformat<T: Read + Seek>(file: T, limit: Option<usize>) -> Result<u6
 
                 for (mv, _) in &game.moves {
                     let hash = position.zobrist_hash::<Zobrist64>(EnPassantMode::Legal);
-                    unique.insert(hash.0);
+                    unique.add(hash.0);
 
                     processed += 1;
                     if limit.is_some_and(|limit| processed >= limit) {
-                        return Ok(unique.len() as u64);
+                        return Ok(unique.count() as u64);
                     }
 
                     let uci_string = mv.display(false).to_string();
@@ -196,5 +196,5 @@ fn unique_viriformat<T: Read + Seek>(file: T, limit: Option<usize>) -> Result<u6
         }
     }
 
-    Ok(unique.len() as u64)
+    Ok(unique.count() as u64)
 }
