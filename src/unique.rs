@@ -13,6 +13,7 @@ use viriformat::dataformat::Game as ViriGame;
 use crate::cli::Backend;
 use crate::error::{Error, Result};
 
+// https://oertl.github.io/hyperloglog-sketch-estimation-paper/paper/paper.pdf
 const BITSUSED: u32 = 20;
 struct HyperLogLog{
     m: [u8; 1 << BITSUSED],
