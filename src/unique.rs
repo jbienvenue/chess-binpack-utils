@@ -13,6 +13,68 @@ use viriformat::dataformat::Game as ViriGame;
 use crate::cli::Backend;
 use crate::error::{Error, Result};
 
+// https://oertl.github.io/hyperloglog-sketch-estimation-paper/paper/paper.pdf
+const BITSUSED: u32 = 20;
+struct HyperLogLog{
+    m: [u8; 1 << BITSUSED],
+}
+impl HyperLogLog{
+    fn new() -> HyperLogLog {
+        HyperLogLog{
+            m: [0; 1 << BITSUSED],
+        }
+    }
+    fn tau(mut x: f64) -> f64{
+        if x == 0.0 || x == 1.0 {
+            return 0.0;
+        }
+        let mut y: f64 = 1.0;
+        let mut z: f64 = 1.0 - x;
+        let mut zp: f64 = 2.0;
+        while zp != z{
+            x = x.sqrt();
+            zp = z;
+            y /= 2.0;
+            z -= (1.0 - x).powf(2.0) * y;
+        }
+        z/3.0
+    }
+    fn sigma(mut x: f64) -> f64 {
+        if x == 1.0 {
+            return f64::INFINITY;
+        }
+        let mut y: f64 = 1.0;
+        let mut z: f64 = x;
+        let mut zp: f64 = 2.0;
+        while zp != z {
+            x *= x;
+            zp = z;
+            z += x * y;
+            y *= 2.0;
+        }
+        return z;
+    }
+    fn add(&mut self, data: u64) {
+        let j: usize = (data >> (64-BITSUSED)) as usize;
+        let w: u64 = data << BITSUSED;
+        self.m[j] = (self.m[j]).max(w.trailing_zeros() as u8);
+    }
+    fn count(&self) -> u64 {
+        let size: u64 = (1 as u64) << BITSUSED;
+        let mut c: [u32; (64-BITSUSED+2) as usize] = [0; (64-BITSUSED+2) as usize];
+        for x in self.m {
+            let k:i32 = (x as i32 - BITSUSED as i32 + 1).max(0);
+            c[k as usize] += 1;
+        }
+        let mut z: f64 = size as f64 * HyperLogLog::tau(1.0 - c[(64-BITSUSED+1) as usize] as f64 / size as f64);
+        for k in (1..64-BITSUSED+1).rev() {
+            z = 0.5 * (z + c[k as usize] as f64);
+        }
+        z += size as f64 * HyperLogLog::sigma(c[0] as f64 / size as f64);
+        return (1.0/(2.0_f64 * (2.0_f64).ln()) * size as f64 * size as f64 / z) as u64;
+    }
+}
+
 pub fn unique_positions_from_path(
     path: &Path,
     limit: Option<usize>,
@@ -39,7 +101,7 @@ pub fn unique_positions_from_file<T: Read + Seek>(
 fn unique_sf<T: Read + Seek>(file: T, limit: Option<usize>) -> Result<u64> {
     let mut reader = CompressedTrainingDataEntryReader::new(file)?;
     let mut position = Chess::default();
-    let mut unique: HashSet<u64> = HashSet::new();
+    let mut unique: HyperLogLog = HyperLogLog::new();
     let mut new_game = true;
     let mut count = 0usize;
 
@@ -59,7 +121,7 @@ fn unique_sf<T: Read + Seek>(file: T, limit: Option<usize>) -> Result<u64> {
         }
 
         let hash = position.zobrist_hash::<Zobrist64>(EnPassantMode::Legal);
-        unique.insert(hash.0);
+        unique.add(hash.0);
 
         if reader.has_next() && reader.is_next_entry_continuation() {
             let uci: UciMove = entry.mv.as_uci().parse().map_err(|error| {
@@ -79,7 +141,7 @@ fn unique_sf<T: Read + Seek>(file: T, limit: Option<usize>) -> Result<u64> {
         }
     }
 
-    Ok(unique.len() as u64)
+    Ok(unique.count() as u64)
 }
 
 fn unique_viriformat<T: Read + Seek>(file: T, limit: Option<usize>) -> Result<u64> {
